@@ -1,0 +1,22 @@
+services:
+  brief-worker:
+    build: .
+    container_name: brief-worker
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      - TZ=America/Sao_Paulo
+    ports:
+      - "8093:8080"   # público só o feed (via proxy); a API exige Bearer token
+    volumes:
+      - brief_data:/data
+    networks:
+      - n8n
+
+volumes:
+  brief_data:
+
+networks:
+  n8n:                # mesma rede Docker do seu n8n (para ele chamar http://brief-worker:8080)
+    external: true
+    name: ${N8N_NETWORK:-n8n_default}

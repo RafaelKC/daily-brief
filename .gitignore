@@ -1,0 +1,5 @@
+.env
+brief-worker/.env
+brief-worker/prompt.md
+__pycache__/
+*.mp3

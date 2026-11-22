@@ -1,0 +1,681 @@
+{
+  "name": "Brief Matinal (podcast)",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "30 6 * * 1-5"
+            }
+          ]
+        }
+      },
+      "id": "9306b55d-97ac-49a7-925c-3b60dbae2481",
+      "name": "Dias úteis 06:30",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        0,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=https://brasilapi.com.br/api/feriados/v1/{{ $now.setZone(\"America/Sao_Paulo\").year }}",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "579fcdf4-208a-4e09-9eb9-0006e008724c",
+      "name": "Feriados nacionais (BrasilAPI)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        224,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 3000,
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Feriados = nacionais (BrasilAPI) + feriados locais + folgas pessoais. Ajuste as 4 constantes abaixo.\nconst FOLGAS_EXTRAS = [ /* 'AAAA-MM-DD', ... folgas/emendas pessoais */ ];\nconst FERIADOS_LOCAIS_FIXOS = [ /* ['MM-DD', 'Nome'], ex.: ['01-25', 'Aniversário de São Paulo'] */ ];\nconst CARNAVAL_E_FERIADO = false;      // segunda/terça de Carnaval\nconst CINZAS_E_FERIADO = true;         // Quarta-feira de Cinzas\n\nlet manual = false;\ntry { manual = $('Teste manual').isExecuted; } catch (e) {}\nconst now = DateTime.now().setZone('America/Sao_Paulo');\nconst today = now.startOf('day');\nconst y = today.year;\n\nfunction easter(year) {\n  const a = year % 19, b = Math.floor(year / 100), c = year % 100, d = Math.floor(b / 4), e = b % 4;\n  const f = Math.floor((b + 8) / 25), g = Math.floor((b - f + 1) / 3), h = (19 * a + b - d - g + 15) % 30;\n  const i = Math.floor(c / 4), k = c % 4, l = (32 + 2 * e + 2 * i - h - k) % 7;\n  const m = Math.floor((a + 11 * h + 22 * l) / 451), month = Math.floor((h + l - 7 * m + 114) / 31);\n  const day = ((h + l - 7 * m + 114) % 31) + 1;\n  return DateTime.fromObject({ year, month, day }, { zone: 'America/Sao_Paulo' });\n}\n\nconst hol = {};\nfor (const it of $input.all()) {\n  const h = it.json;\n  if (h && h.date && (CARNAVAL_E_FERIADO || !/carnaval/i.test(h.name || ''))) hol[h.date] = h.name;\n}\nfor (const yy of [y, y + 1]) {\n  const e = easter(yy);\n  if (CINZAS_E_FERIADO) hol[e.minus({ days: 46 }).toISODate()] = 'Quarta-feira de Cinzas';\n  hol[e.minus({ days: 2 }).toISODate()] ||= 'Sexta-feira Santa';\n  hol[e.plus({ days: 60 }).toISODate()] ||= 'Corpus Christi';\n  for (const [md, nome] of FERIADOS_LOCAIS_FIXOS) hol[yy + '-' + md] = nome;\n  hol[yy + '-01-01'] ||= 'Confraternização Universal';\n  hol[yy + '-12-25'] ||= 'Natal';\n}\nfor (const d of FOLGAS_EXTRAS) hol[d] = 'Folga pessoal';\n\nconst isOff = (d) => d.weekday >= 6 || !!hol[d.toISODate()];\nlet next = today.plus({ days: 1 });\nwhile (isOff(next)) next = next.plus({ days: 1 });\nlet prev = today.minus({ days: 1 });\nwhile (isOff(prev)) prev = prev.minus({ days: 1 });\n\nreturn [{ json: {\n  today: today.toISODate(),\n  is_holiday: manual ? false : isOff(today),\n  test: manual,\n  holiday_name: hol[today.toISODate()] || null,\n  next_business_day: next.toISODate(),\n  prev_business_day: prev.toISODate(),\n  window_start: today.toISO(),\n  window_end: next.endOf('day').toISO(),\n} }];"
+      },
+      "id": "cbba19e0-7c00-4936-984d-6c6cb7ea1648",
+      "name": "Calendário útil (feriados)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        448,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.is_holiday }}",
+              "operator": {
+                "type": "boolean",
+                "operation": "false",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "d8f1faae-7617-4dbe-ad90-5e071fe2ac44",
+      "name": "É dia útil?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        672,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "url": "http://brief-worker:8080/api/state",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "options": {
+          "timeout": 15000
+        }
+      },
+      "id": "4ef34ec6-b077-47f5-9d04-b1c82c9edb91",
+      "name": "Último brief (worker)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        896,
+        0
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "Brief Worker"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const cal = $('Calendário útil (feriados)').first().json;\nconst st = $input.first().json || {};\nlet cutoff = st.last_run ? DateTime.fromISO(st.last_run) : DateTime.fromISO(cal.prev_business_day, { zone: 'America/Sao_Paulo' }).set({ hour: 6, minute: 30 });\nconst floor = DateTime.now().minus({ days: 4 });\nif (cutoff < floor) cutoff = floor;\nreturn [{ json: { ...cal, cutoff_iso: cutoff.toISO(), cutoff_epoch: Math.floor(cutoff.toSeconds()) } }];"
+      },
+      "id": "2784a028-3aaa-46dc-8279-03cbae6b47ff",
+      "name": "Janela de novidade",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT json_build_object(\n 'contas', COALESCE((SELECT json_agg(x ORDER BY x.data) FROM (\n   SELECT t.description AS descricao, t.date AS data, t.paid AS pago, round(t.amount_cents/100.0,2) AS valor,\n          a.name AS conta, c.name AS categoria, t.updated_at AS atualizado_em\n   FROM organizze.transactions t\n   LEFT JOIN organizze.accounts a ON a.id=t.account_id\n   LEFT JOIN organizze.categories c ON c.id=t.category_id\n   WHERE t.credit_card_id IS NULL AND t.amount_cents < 0 AND t.oposite_transaction_id IS NULL\n     AND ((t.date BETWEEN current_date-3 AND current_date+1) OR (t.paid=false AND t.date BETWEEN current_date-30 AND current_date))\n ) x),'[]'::json),\n 'faturas_cartao', COALESCE((SELECT json_agg(y ORDER BY y.vencimento) FROM (\n   SELECT cc.name AS cartao, i.date AS vencimento, i.closing_date AS fechamento, round(i.amount_cents/100.0,2) AS valor_fatura,\n          round(i.payment_amount_cents/100.0,2) AS valor_pago, round(i.balance_cents/100.0,2) AS saldo\n   FROM organizze.credit_card_invoices i JOIN organizze.credit_cards cc ON cc.id=i.credit_card_id\n   WHERE i.date BETWEEN current_date-3 AND current_date+3\n ) y),'[]'::json),\n 'hoje', current_date\n) AS organizze",
+        "options": {}
+      },
+      "id": "e5aa1d23-6e32-4abc-b174-7446515ff64e",
+      "name": "Organizze: pagamentos (Postgres)",
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.7,
+      "position": [
+        1344,
+        0
+      ],
+      "executeOnce": true,
+      "alwaysOutputData": true,
+      "credentials": {
+        "postgres": {
+          "name": "Postgres (espelho do Organizze)"
+        }
+      },
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "limit": 60,
+        "filters": {
+          "q": "=in:inbox -category:promotions -category:social after:{{ $(\"Janela de novidade\").first().json.cutoff_epoch }}",
+          "readStatus": "unread"
+        }
+      },
+      "id": "20103a43-2627-4943-b2aa-097c3e03a450",
+      "name": "Gmail: não lidos",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        1568,
+        0
+      ],
+      "executeOnce": true,
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput",
+      "disabled": false,
+      "credentials": {
+        "gmailOAuth2": {
+          "name": "Gmail"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "limit": 10,
+        "simple": false,
+        "filters": {
+          "q": "=(from:SEU-BANCO.com OR subject:(carteira recomendada) OR subject:(análise de mercado)) -category:promotions after:{{ $(\"Janela de novidade\").first().json.cutoff_epoch }}",
+          "readStatus": "both"
+        },
+        "options": {
+          "downloadAttachments": false
+        }
+      },
+      "id": "64754c06-4e3a-4b78-bfbe-39accdade8b1",
+      "name": "Gmail: análises financeiras",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.2,
+      "position": [
+        1792,
+        0
+      ],
+      "executeOnce": true,
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput",
+      "disabled": false,
+      "credentials": {
+        "gmailOAuth2": {
+          "name": "Gmail"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "https://www.googleapis.com/calendar/v3/users/me/calendarList",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleCalendarOAuth2Api",
+        "options": {
+          "timeout": 20000
+        }
+      },
+      "id": "fad5a5a5-59d1-488f-8b7b-0a4aba2ba01c",
+      "name": "Google Calendar: calendários",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        2016,
+        0
+      ],
+      "executeOnce": true,
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "name": "Google Calendar"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const cals = ($input.first().json.items || []).filter(c => !c.deleted);\nif (!cals.length) return [{ json: { id: 'primary', summary: 'Pessoal' } }];\nreturn cals.map(c => ({ json: { id: c.id, summary: c.summaryOverride || c.summary } }));"
+      },
+      "id": "e9af7895-530b-487e-b851-e760ce4aa7b2",
+      "name": "Calendários a consultar",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2240,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=https://www.googleapis.com/calendar/v3/calendars/{{ encodeURIComponent($json.id) }}/events",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "googleCalendarOAuth2Api",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "timeMin",
+              "value": "={{ $(\"Janela de novidade\").first().json.window_start }}"
+            },
+            {
+              "name": "timeMax",
+              "value": "={{ $(\"Janela de novidade\").first().json.window_end }}"
+            },
+            {
+              "name": "singleEvents",
+              "value": "true"
+            },
+            {
+              "name": "orderBy",
+              "value": "startTime"
+            },
+            {
+              "name": "timeZone",
+              "value": "America/Sao_Paulo"
+            },
+            {
+              "name": "maxResults",
+              "value": "50"
+            }
+          ]
+        },
+        "options": {
+          "timeout": 20000
+        }
+      },
+      "id": "d5da5232-e818-4f3a-9e14-13b9e68c66ca",
+      "name": "Google Calendar: eventos",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        2464,
+        0
+      ],
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "name": "Google Calendar"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "url": "https://api.ticktick.com/open/v1/project",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "oAuth2Api",
+        "options": {
+          "timeout": 20000
+        }
+      },
+      "id": "dbd90b50-b66e-403f-8488-06523714d9c4",
+      "name": "TickTick: projetos",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        2688,
+        0
+      ],
+      "executeOnce": true,
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "oAuth2Api": {
+          "name": "TickTick OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const projs = $input.all().map(i => i.json).filter(p => p && p.id && !p.closed);\nreturn [{ json: { id: 'inbox', name: 'Inbox' } }, ...projs.map(p => ({ json: { id: p.id, name: p.name } }))];"
+      },
+      "id": "ffb72927-1bd7-416c-875a-902b840f2ce8",
+      "name": "Projetos TickTick",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2912,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "url": "=https://api.ticktick.com/open/v1/project/{{ $json.id }}/data",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "oAuth2Api",
+        "options": {
+          "timeout": 20000
+        }
+      },
+      "id": "f2823747-e269-482b-8706-ef92dbc96ecf",
+      "name": "TickTick: tarefas",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        3136,
+        0
+      ],
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "oAuth2Api": {
+          "name": "TickTick OAuth2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Edite à vontade. Feeds regionais do g1: https://g1.globo.com/rss/g1/<uf>/<estado>/\nconst FEEDS = [\n  ['g1', 'https://g1.globo.com/rss/g1/'],\n  ['Folha', 'https://feeds.folha.uol.com.br/emcimadahora/rss091.xml'],\n  ['BBC Brasil', 'https://www.bbc.com/portuguese/index.xml'],\n  ['Nexo', 'https://www.nexojornal.com.br/rss.xml'],\n  ['InfoMoney', 'https://www.infomoney.com.br/feed/'],\n  ['Brazil Journal', 'https://braziljournal.com/feed/'],\n  ['Tecnoblog', 'https://tecnoblog.net/feed/'],\n  ['Canaltech', 'https://canaltech.com.br/rss/'],\n  ['Diolinux', 'https://diolinux.com.br/feed'],\n  ['Hacker News', 'https://hnrss.org/frontpage?points=150'],\n  ['The Verge', 'https://www.theverge.com/rss/index.xml'],\n];\nreturn FEEDS.map(([fonte, url]) => ({ json: { fonte, url } }));"
+      },
+      "id": "587f069e-0bb7-480c-a69f-c935daec7e89",
+      "name": "Lista de feeds RSS",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3360,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $json.url }}",
+        "options": {}
+      },
+      "id": "8375a102-8a01-4a69-9037-147f9d2da146",
+      "name": "RSS: ler feeds",
+      "type": "n8n-nodes-base.rssFeedRead",
+      "typeVersion": 1.2,
+      "position": [
+        3584,
+        0
+      ],
+      "alwaysOutputData": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const J = $('Janela de novidade').first().json;\nconst cutoff = DateTime.fromISO(J.cutoff_iso);\nconst safe = (name) => { try { return $(name).all().map(i => i.json).filter(x => x && Object.keys(x).length && !x.error); } catch (e) { return []; } };\nconst errs = (name) => { try { return $(name).all().map(i => i.json).filter(x => x && x.error).map(x => String(x.error.message || x.error).slice(0, 200)); } catch (e) { return []; } };\nconst cut = (s, n) => (s || '').replace(/\\s+/g, ' ').trim().slice(0, n);\n\n// Calendário\nconst calNames = safe('Calendários a consultar');\nconst eventos = [];\nsafe('Google Calendar: eventos').forEach((r, idx) => {\n  const cal = r.summary || (calNames[idx] || {}).summary;\n  (r.items || []).forEach(e => {\n    if (e.status === 'cancelled') return;\n    eventos.push({ calendario: cal, titulo: e.summary, inicio: e.start && (e.start.dateTime || e.start.date),\n      fim: e.end && (e.end.dateTime || e.end.date), local: e.location, descricao: cut(e.description, 300),\n      meet: e.hangoutLink || undefined });\n  });\n});\n\n// TickTick\nconst projName = {};\nsafe('Projetos TickTick').forEach(p => projName[p.id] = p.name);\nconst limite = DateTime.fromISO(J.window_end);\nconst tarefas = [];\nsafe('TickTick: tarefas').forEach(r => (r.tasks || []).forEach(t => {\n  if (t.status !== 0) return;\n  const due = t.dueDate ? DateTime.fromISO(t.dueDate.replace(/([+-]\\d{2})(\\d{2})$/, '$1:$2')) : null;\n  if (!due || due > limite) return;\n  tarefas.push({ titulo: t.title, projeto: projName[t.projectId] || (r.project && r.project.name) || 'Inbox',\n    vencimento: due.setZone('America/Sao_Paulo').toISO(), dia_inteiro: !!t.isAllDay,\n    atrasada: due < DateTime.fromISO(J.window_start), prioridade: t.priority, conteudo: cut(t.content || t.desc, 200) });\n}));\n\n// Gmail\nconst emails = safe('Gmail: não lidos').filter(m => m.Subject || m.From).map(m => ({ de: m.From, assunto: m.Subject, trecho: cut(m.snippet, 300),\n  data: m.internalDate ? DateTime.fromMillis(+m.internalDate).toISO() : undefined,\n  link: m.threadId ? 'https://mail.google.com/mail/u/0/#inbox/' + m.threadId : undefined }));\nconst financas = safe('Gmail: análises financeiras').filter(m => m.subject || m.Subject).map(m => ({ de: (m.from && m.from.text) || m.From, assunto: m.subject || m.Subject,\n  data: m.date, texto: cut(m.text, 5000), link: m.threadId ? 'https://mail.google.com/mail/u/0/#all/' + m.threadId : undefined }));\n\n// RSS: só o que é posterior ao corte, até 6 por fonte\nconst feedsList = safe('Lista de feeds RSS');\nconst hostToFonte = {};\nfeedsList.forEach(f => { try { hostToFonte[new URL(f.url).hostname.replace(/^www\\./, '')] = f.fonte; } catch (e) {} });\nconst porFonte = {};\nsafe('RSS: ler feeds').forEach(it => {\n  const d = it.isoDate ? DateTime.fromISO(it.isoDate) : null;\n  if (!it.link || !d || d <= cutoff) return;\n  let host = ''; try { host = new URL(it.link).hostname.replace(/^www\\./, ''); } catch (e) {}\n  const match = Object.entries(hostToFonte).find(([h]) => host === h || host.endsWith('.' + h));\n  const fonte = match ? match[1] : host;\n  (porFonte[fonte] ||= []).push({ titulo: it.title, link: it.link, data: d.toISO(), resumo: cut(it.contentSnippet || it.content, 280) });\n});\nconst noticias = Object.fromEntries(Object.entries(porFonte).map(([k, v]) => [k, v.sort((a, b) => b.data.localeCompare(a.data)).slice(0, 6)]));\n\nconst org = (safe('Organizze: pagamentos (Postgres)')[0] || {}).organizze || null;\n\nreturn [{ json: {\n  date: J.today,\n  cutoff: J.cutoff_iso,\n  test: !!J.test,\n  data: {\n    hoje: J.today,\n    proximo_dia_util: J.next_business_day,\n    agenda: eventos,\n    tarefas_ticktick: tarefas,\n    pagamentos_organizze: org,\n    emails_nao_lidos: emails,\n    emails_financas: financas,\n    feeds: noticias,\n    newsletters_web: ['The News', 'The News Money', 'The News Sports', 'TheJobs', 'Filipe Deschamps'],\n    fontes_com_erro: {\n      gmail: errs('Gmail: não lidos'), calendario: errs('Google Calendar: calendários'),\n      ticktick: errs('TickTick: projetos'), organizze: errs('Organizze: pagamentos (Postgres)'),\n    },\n  },\n} }];"
+      },
+      "id": "8c3dec85-d9e2-4b17-9335-f5a096bee60a",
+      "name": "Montar dados do brief",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3808,
+        0
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://brief-worker:8080/api/brief",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpHeaderAuth",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json) }}",
+        "options": {
+          "timeout": 1200000
+        }
+      },
+      "id": "170be828-f30f-499f-987b-02e03812f4fd",
+      "name": "Gerar episódio (worker)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        4032,
+        0
+      ],
+      "executeOnce": true,
+      "credentials": {
+        "httpHeaderAuth": {
+          "name": "Brief Worker"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## Brief Matinal\nDias úteis 06:30, pulando feriados nacionais, locais e folgas. Coleta Organizze, Gmail, Calendar, TickTick e RSS e envia ao **brief-worker** (claude -p + edge-tts), que publica o episódio no feed privado.\n\nFeriados locais/folgas: edite as constantes em *Calendário útil (feriados)*. Rode pelo *Teste manual* para gerar um episódio [Teste] fora do horário. Feeds: edite *Lista de feeds RSS*.",
+        "height": 192,
+        "width": 576,
+        "color": 4
+      },
+      "id": "0cf231e6-48b7-4512-8617-12dd643d2784",
+      "name": "Sticky Note 666b3b92",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1808,
+        -288
+      ]
+    },
+    {
+      "id": "b11c85eb-e60c-48ee-83e9-5ac6bb0bab5a",
+      "name": "Teste manual",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        0,
+        200
+      ],
+      "parameters": {}
+    }
+  ],
+  "connections": {
+    "Dias úteis 06:30": {
+      "main": [
+        [
+          {
+            "node": "Feriados nacionais (BrasilAPI)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Feriados nacionais (BrasilAPI)": {
+      "main": [
+        [
+          {
+            "node": "Calendário útil (feriados)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calendário útil (feriados)": {
+      "main": [
+        [
+          {
+            "node": "É dia útil?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "É dia útil?": {
+      "main": [
+        [
+          {
+            "node": "Último brief (worker)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Último brief (worker)": {
+      "main": [
+        [
+          {
+            "node": "Janela de novidade",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Janela de novidade": {
+      "main": [
+        [
+          {
+            "node": "Organizze: pagamentos (Postgres)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Organizze: pagamentos (Postgres)": {
+      "main": [
+        [
+          {
+            "node": "Gmail: não lidos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gmail: não lidos": {
+      "main": [
+        [
+          {
+            "node": "Gmail: análises financeiras",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Gmail: análises financeiras": {
+      "main": [
+        [
+          {
+            "node": "Google Calendar: calendários",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Calendar: calendários": {
+      "main": [
+        [
+          {
+            "node": "Calendários a consultar",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Calendários a consultar": {
+      "main": [
+        [
+          {
+            "node": "Google Calendar: eventos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Calendar: eventos": {
+      "main": [
+        [
+          {
+            "node": "TickTick: projetos",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TickTick: projetos": {
+      "main": [
+        [
+          {
+            "node": "Projetos TickTick",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Projetos TickTick": {
+      "main": [
+        [
+          {
+            "node": "TickTick: tarefas",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "TickTick: tarefas": {
+      "main": [
+        [
+          {
+            "node": "Lista de feeds RSS",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Lista de feeds RSS": {
+      "main": [
+        [
+          {
+            "node": "RSS: ler feeds",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "RSS: ler feeds": {
+      "main": [
+        [
+          {
+            "node": "Montar dados do brief",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Montar dados do brief": {
+      "main": [
+        [
+          {
+            "node": "Gerar episódio (worker)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Teste manual": {
+      "main": [
+        [
+          {
+            "node": "Feriados nacionais (BrasilAPI)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {}
+}
