@@ -4,7 +4,7 @@ Um **podcast pessoal e privado** gerado todo dia útil de manhã: agenda, tarefa
 
 - **Orquestração:** [n8n](https://n8n.io) busca os dados.
 - **Roteiro:** [Claude Code](https://docs.claude.com/en/docs/claude-code) em modo headless escreve o texto com um token de longa duração da sua assinatura Claude, sem API paga.
-- **Voz:** [edge-tts](https://github.com/rany2/edge-tts), gratuito, com [Piper](https://github.com/rhasspy/piper) local como reserva.
+- **Voz:** [Gemini TTS](https://ai.google.dev/gemini-api/docs/speech-generation) (chave grátis do Google AI Studio), muito mais natural. Se a cota acabar, cai para [edge-tts](https://github.com/rany2/edge-tts) e, em último caso, para [Piper](https://github.com/rhasspy/piper) local.
 - **Entrega:** um feed RSS de podcast que só você conhece.
 
 ```mermaid
@@ -17,7 +17,7 @@ flowchart LR
   C --> C4[Organizze<br/>contas/faturas]
   C --> C5[RSS]
   C1 & C2 & C3 & C4 & C5 --> D[brief-worker<br/>claude -p → roteiro + notas]
-  D --> E[edge-tts → MP3]
+  D --> E[Gemini TTS → MP3<br/>reserva: edge-tts / Piper]
   E --> F[(feed.xml privado)]
   F --> G[📱 App de podcast]
 ```
@@ -31,7 +31,7 @@ flowchart LR
 | Coleta | n8n | Cada fonte tem `continueOnError`. Se uma falhar, o brief sai sem ela e avisa no áudio. |
 | Newsletters sem RSS | Claude | O Claude usa `WebFetch`/`WebSearch` para achar a edição mais recente. |
 | Roteiro | worker | `claude -p --json-schema` devolve `title`, `script` (falado), `notes_html` (com links) e `summary`. |
-| Áudio | worker | edge-tts (`pt-BR-AntonioNeural`). Se falhar, usa Piper (`pt_BR-faber-medium`). |
+| Áudio | worker | Gemini TTS (`gemini-3.8-flash-tts`, voz `Charon`), em blocos de ~4.500 caracteres. Se falhar, usa edge-tts (`pt-BR-AntonioNeural`) e depois Piper (`pt_BR-faber-medium`). |
 | Entrega | worker | `https://SEU-DOMINIO/<FEED_TOKEN>/feed.xml` com `itunes:block` e `noindex`. Guarda os últimos 10 episódios. |
 
 Os links das notícias ficam nas **notas do episódio**, que o app de podcast mostra. O áudio não lê URLs.
@@ -90,6 +90,10 @@ docker exec <container-do-n8n> wget -qO- http://brief-worker:8080/health   # {"o
 ```
 
 > O uso conta na cota da sua assinatura. Um brief por dia é pouco: dá ~1–2 min de processamento.
+
+### 2b. Voz natural com Gemini (opcional, recomendado)
+
+Gere uma chave grátis em [aistudio.google.com/apikey](https://aistudio.google.com/apikey) e coloque em `GEMINI_API_KEY=` no `.env`. Sem a chave, o worker usa o edge-tts. O plano grátis tem limite diário de requisições: um episódio usa de 2 a 3. Se o limite estourar, o worker cai para o edge-tts automaticamente.
 
 ### 3. Expor o feed com HTTPS
 
@@ -162,7 +166,8 @@ Prefira um app que baixe o feed direto do celular, como o **AntennaPod** (*Adici
 | O que | Onde |
 |---|---|
 | Tom, seções, duração, regras de negócio | `brief-worker/prompt.md` (copie de `prompt.example.md`) |
-| Voz e velocidade | `TTS_VOICE` e `TTS_RATE` no `.env`. Liste as vozes com `docker exec brief-worker edge-tts --list-voices \| grep pt-BR`. |
+| Voz principal | `GEMINI_TTS_VOICE` (Charon, Puck, Kore, Sulafat, Aoede…), `GEMINI_TTS_MODEL` e `GEMINI_TTS_STYLE` (instrução de estilo) no `.env` |
+| Voz de reserva | `TTS_VOICE` e `TTS_RATE` (edge-tts). Liste as vozes com `docker exec brief-worker edge-tts --list-voices \| grep pt-BR`. |
 | Modelo | `CLAUDE_MODEL` (`sonnet`, `opus`, …) |
 | Episódios guardados | `KEEP_EPISODES` |
 | Horário | gatilho *Dias úteis 06:30* no n8n |
@@ -171,6 +176,7 @@ Prefira um app que baixe o feed direto do celular, como o **AntennaPod** (*Adici
 
 | Sintoma | Causa e solução |
 |---|---|
+| Episódio saiu com `tts: edge-tts` em vez de `gemini` | Veja `docker logs brief-worker \| grep gemini`. Costuma ser cota do plano grátis (429) ou chave inválida. |
 | `edge-tts` 403 / `WSServerHandshakeError` | A Microsoft mudou o handshake. Rode `docker compose build --no-cache && docker compose up -d` para pegar a versão nova (o Piper cobre enquanto isso). |
 | TickTick: `Unable to sign without access token` | A credencial foi criada mas o OAuth não foi concluído. Clique em *Connect my account*. |
 | Google pede novo login toda semana | O app OAuth está em modo Teste. Publique em produção (passo 5). |

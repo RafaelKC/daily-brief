@@ -1,6 +1,7 @@
 """brief-worker: recebe os dados do n8n, gera o roteiro com Claude Code,
 sintetiza o áudio (edge-tts, Piper como reserva) e publica um feed de podcast privado."""
 import asyncio
+import base64
 import hmac
 import json
 import os
@@ -13,6 +14,7 @@ from pathlib import Path
 from xml.sax.saxutils import escape
 
 import edge_tts
+import aiohttp
 from aiohttp import web
 
 DATA = Path(os.environ.get("DATA_DIR", "/data"))
@@ -30,6 +32,14 @@ RATE = os.environ.get("TTS_RATE", "+8%")
 KEEP = int(os.environ.get("KEEP_EPISODES", "10"))
 CLAUDE_TIMEOUT = int(os.environ.get("CLAUDE_TIMEOUT", "900"))
 PIPER_MODEL = "/opt/piper/pt_BR-faber-medium.onnx"
+GEMINI_KEY = os.environ.get("GEMINI_API_KEY", "").strip()
+GEMINI_MODEL = os.environ.get("GEMINI_TTS_MODEL", "gemini-3.8-flash-tts")
+GEMINI_VOICE = os.environ.get("GEMINI_TTS_VOICE", "Charon")
+GEMINI_STYLE = os.environ.get(
+    "GEMINI_TTS_STYLE",
+    "Leia o texto a seguir em português do Brasil como o apresentador de um podcast matinal: "
+    "tom caloroso e descontraído, ritmo natural de conversa, sem pressa, sorrindo na voz.")
+GEMINI_CHUNK = int(os.environ.get("GEMINI_TTS_CHUNK_CHARS", "4500"))
 
 WEEKDAYS = ["segunda-feira", "terça-feira", "quarta-feira", "quinta-feira",
             "sexta-feira", "sábado", "domingo"]
@@ -128,7 +138,70 @@ async def tts_piper(text: str, mp3: Path) -> None:
                   "-ac", "1", "-b:a", "64k", str(mp3))
 
 
+def split_chunks(text: str, limit: int) -> list[str]:
+    """Quebra o roteiro em blocos de até `limit` caracteres, respeitando parágrafos e frases."""
+    pieces: list[str] = []
+    for para in [p.strip() for p in re.split(r"\n\s*\n|\n", text) if p.strip()]:
+        if len(para) <= limit:
+            pieces.append(para)
+        else:
+            pieces.extend(s.strip() for s in re.split(r"(?<=[.!?])\s+", para) if s.strip())
+    chunks, cur = [], ""
+    for p in pieces:
+        if cur and len(cur) + len(p) + 2 > limit:
+            chunks.append(cur)
+            cur = p
+        else:
+            cur = f"{cur}\n\n{p}" if cur else p
+    if cur:
+        chunks.append(cur)
+    return chunks
+
+
+async def tts_gemini(text: str, mp3: Path) -> None:
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{GEMINI_MODEL}:generateContent"
+    headers = {"x-goog-api-key": GEMINI_KEY}
+    rate = 24000
+    pcm = bytearray()
+    async with aiohttp.ClientSession(timeout=aiohttp.ClientTimeout(total=300)) as s:
+        for i, chunk in enumerate(split_chunks(text, GEMINI_CHUNK)):
+            body = {
+                "contents": [{"parts": [{"text": f"{GEMINI_STYLE}\n\n{chunk}"}]}],
+                "generationConfig": {
+                    "responseModalities": ["AUDIO"],
+                    "speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": GEMINI_VOICE}}},
+                },
+            }
+            for attempt in range(3):
+                async with s.post(url, json=body, headers=headers) as r:
+                    js = await r.json(content_type=None)
+                if r.status == 200:
+                    break
+                msg = str(js.get("error", js))[:300]
+                if r.status == 429 or attempt == 2:  # cota esgotada não adianta repetir
+                    raise RuntimeError(f"gemini {r.status}: {msg}")
+                await asyncio.sleep(5 * (attempt + 1))
+            part = js["candidates"][0]["content"]["parts"][0]["inlineData"]
+            m = re.search(r"rate=(\d+)", part.get("mimeType", ""))
+            rate = int(m.group(1)) if m else rate
+            if i:
+                pcm += b"\x00\x00" * int(rate * 0.35)  # respiro entre blocos
+            pcm += base64.b64decode(part["data"])
+    with tempfile.TemporaryDirectory() as td:
+        raw = Path(td) / "out.pcm"
+        raw.write_bytes(pcm)
+        await run("ffmpeg", "-y", "-loglevel", "error", "-f", "s16le", "-ar", str(rate), "-ac", "1",
+                  "-i", str(raw), "-b:a", "64k", str(mp3))
+
+
 async def synth(text: str, mp3: Path) -> str:
+    if GEMINI_KEY:
+        try:
+            await tts_gemini(text, mp3)
+            if mp3.stat().st_size > 10_000:
+                return f"gemini:{GEMINI_MODEL}:{GEMINI_VOICE}"
+        except Exception as e:  # noqa: BLE001
+            print(f"gemini-tts falhou, usando edge-tts: {e}", flush=True)
     try:
         await tts_edge(text, mp3)
         if mp3.stat().st_size > 10_000:
