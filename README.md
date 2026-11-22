@@ -1,6 +1,6 @@
 # Brief Matinal 🎧
 
-Um **podcast pessoal e privado** gerado todo dia útil de manhã: agenda, tarefas, contas a pagar, e-mails que precisam de atenção, newsletters e notícias, num episódio de menos de 10 minutos para ouvir no carro.
+Um **podcast pessoal e privado** gerado todo dia útil de manhã: previsão do tempo, agenda, tarefas, contas a pagar, e-mails que precisam de atenção, newsletters e notícias, num episódio de menos de 10 minutos para ouvir no carro.
 
 - **Orquestração:** [n8n](https://n8n.io) busca os dados.
 - **Roteiro:** [Claude Code](https://docs.claude.com/en/docs/claude-code) em modo headless escreve o texto com um token de longa duração da sua assinatura Claude, sem API paga.
@@ -16,7 +16,8 @@ flowchart LR
   C --> C3[TickTick<br/>hoje + atrasadas]
   C --> C4[Organizze<br/>contas/faturas]
   C --> C5[RSS]
-  C1 & C2 & C3 & C4 & C5 --> D[brief-worker<br/>claude -p → roteiro + notas]
+  C --> C6[Previsão do tempo<br/>Open-Meteo]
+  C1 & C2 & C3 & C4 & C5 & C6 --> D[brief-worker<br/>claude -p → roteiro + notas]
   D --> E[Gemini TTS → MP3<br/>reserva: edge-tts / Piper]
   E --> F[(feed.xml privado)]
   F --> G[📱 App de podcast]
@@ -115,6 +116,7 @@ sudo iptables -I INPUT <pos> -s 10.0.0.0/24 -p tcp --dport 8093 -j ACCEPT && sud
 2. Ajuste os nós de **Code**:
    - **Calendário útil (feriados):** `FERIADOS_LOCAIS_FIXOS`, `FOLGAS_EXTRAS`, `CARNAVAL_E_FERIADO` e `CINZAS_E_FERIADO`.
    - **Lista de feeds RSS:** suas fontes.
+   - **Previsão do tempo (Open-Meteo):** `latitude` e `longitude` da sua cidade (grátis, sem chave). Ajuste também o `local` em *Montar dados do brief*.
    - **Montar dados do brief:** a lista `newsletters_web`, com as newsletters que o Claude deve buscar na web.
 3. No nó **Gmail: análises financeiras**, troque `from:SEU-BANCO.com` pelo remetente dos e-mails de análise do seu banco ou corretora.
 
