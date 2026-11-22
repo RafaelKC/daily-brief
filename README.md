@@ -183,3 +183,7 @@ Prefira um app que baixe o feed direto do celular, como o **AntennaPod** (*Adici
 - A API do worker exige um Bearer token. Os dados enviados pelo n8n ficam só no seu servidor (últimos N episódios).
 - O conteúdo de e-mails e notícias é tratado como dado, não como instrução, no prompt.
 - `.env` e `prompt.md` estão no `.gitignore`.
+
+## Licença
+
+[MIT](LICENSE)
