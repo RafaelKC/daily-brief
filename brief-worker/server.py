@@ -5,6 +5,7 @@ import base64
 import hmac
 import json
 import os
+import random
 import re
 import shutil
 import tempfile
@@ -14,6 +15,7 @@ from pathlib import Path
 from xml.sax.saxutils import escape
 
 import edge_tts
+from PIL import Image, ImageDraw, ImageFont
 import aiohttp
 from aiohttp import web
 
@@ -218,6 +220,84 @@ async def duration(mp3: Path) -> int:
     return int(float(out.decode().strip() or 0))
 
 
+# ---------- capas (identidade visual rndm / chicovis.dev) ----------
+FONT_DIR = Path(os.environ.get("FONT_DIR", "/opt/fonts"))
+ARTWORK_BRAND = os.environ.get("ARTWORK_BRAND", "")
+ARTWORK_VERSION = "2"  # mude para forçar os apps a baixarem as capas de novo
+BG, ACCENT, WHITE, DIM = (10, 10, 10), (255, 107, 0), (248, 250, 252), (203, 213, 225)
+ART = 1400
+
+
+def _font(name: str, size: int) -> ImageFont.FreeTypeFont:
+    return ImageFont.truetype(str(FONT_DIR / name), size)
+
+
+def _spaced(d: ImageDraw.ImageDraw, x: int, y: int, text: str, font, fill, spacing: int) -> int:
+    for ch in text:
+        d.text((x, y), ch, font=font, fill=fill)
+        x += int(d.textlength(ch, font=font)) + spacing
+    return x
+
+
+def _wave(d: ImageDraw.ImageDraw, x: int, y_mid: int, seed: str, n: int = 20, w: int = 22, gap: int = 18, hmax: int = 250) -> None:
+    rnd = random.Random(seed)
+    for _ in range(n):
+        h = rnd.randint(int(hmax * 0.18), hmax)
+        d.rounded_rectangle([x, y_mid - h // 2, x + w, y_mid + h // 2], radius=w // 2, fill=ACCENT)
+        x += w + gap
+
+
+def render_artwork(path: Path, date: str | None = None, test: bool = False) -> None:
+    """Capa quadrada 1400x1400: a do podcast (date=None) ou a de um episódio, com a data."""
+    im = Image.new("RGB", (ART, ART), BG)
+    d = ImageDraw.Draw(im)
+    m = 110
+    d.rectangle([0, 0, ART, 14], fill=ACCENT)
+    if date is None:
+        _spaced(d, m, 150, "06:30 · DIAS ÚTEIS", _font("Inter-Bold.ttf", 56), ACCENT, 6)
+        title = _font("Inter-ExtraBold.ttf", 250)
+        d.text((m, 250), "Brief", font=title, fill=WHITE)
+        d.text((m, 520), "Matinal", font=title, fill=WHITE)
+        d.text((m, 850), "Seu dia em menos de 10 minutos", font=_font("Inter-Regular.ttf", 60), fill=DIM)
+        _wave(d, m, 1080, "brief-matinal")
+    else:
+        dt = datetime.fromisoformat(date)
+        _spaced(d, m, 150, "BRIEF MATINAL", _font("Inter-Bold.ttf", 56), ACCENT, 8)
+        d.text((m, 250), WEEKDAYS[dt.weekday()].capitalize(), font=_font("Inter-Regular.ttf", 90), fill=DIM)
+        d.text((m, 360), dt.strftime("%d/%m"), font=_font("FiraCode-Bold.ttf", 330), fill=WHITE)
+        yfont = _font("FiraCode-Regular.ttf", 96)
+        d.text((m + 8, 770), str(dt.year), font=yfont, fill=ACCENT)
+        if test:
+            x0 = m + 8 + int(d.textlength(str(dt.year), font=yfont)) + 50
+            pf = _font("Inter-Bold.ttf", 48)
+            tw = int(d.textlength("TESTE", font=pf))
+            d.rounded_rectangle([x0, 785, x0 + tw + 60, 875], radius=45, outline=ACCENT, width=4)
+            d.text((x0 + 30, 830), "TESTE", font=pf, fill=ACCENT, anchor="lm")
+        _wave(d, m, 1080, date)
+    if ARTWORK_BRAND:
+        d.text((ART - m, ART - 90), ARTWORK_BRAND, font=_font("Inter-ExtraBold.ttf", 56), fill=ACCENT, anchor="rd")
+    im.save(path, optimize=True)
+
+
+def ensure_artwork(eps: list[dict]) -> bool:
+    """Gera a capa do podcast e a de cada episódio que ainda não tem. Devolve True se mudou algo."""
+    changed = False
+    marker = DATA / f"cover-v{ARTWORK_VERSION}.ok"
+    if not marker.exists() or not (DATA / "cover.png").exists():
+        render_artwork(DATA / "cover.png")
+        marker.write_text("ok")
+        for e in eps:
+            e.pop("image", None)
+    for e in eps:
+        img = e.get("image")
+        if not img or not (EP_DIR / img).exists():
+            img = e["file"].replace(".mp3", ".png")
+            render_artwork(EP_DIR / img, e["date"], bool(e.get("test")))
+            e["image"] = img
+            changed = True
+    return changed
+
+
 # ---------- feed ----------
 def feed_url(path: str) -> str:
     return f"{BASE}/{FEED_TOKEN}/{path}"
@@ -228,6 +308,8 @@ def build_feed(eps: list[dict]) -> str:
     for e in sorted(eps, key=lambda x: x["created_at"], reverse=True):
         pub = format_datetime(datetime.fromisoformat(e["created_at"]))
         d = e.get("duration", 0)
+        img = (f'\n    <itunes:image href="{feed_url("ep/" + e["image"])}?v={ARTWORK_VERSION}"/>'
+               if e.get("image") else "")
         items.append(f"""
   <item>
     <title>{escape(e['title'])}</title>
@@ -236,7 +318,7 @@ def build_feed(eps: list[dict]) -> str:
     <description><![CDATA[{e['notes_html']}]]></description>
     <content:encoded><![CDATA[{e['notes_html']}]]></content:encoded>
     <itunes:summary>{escape(e.get('summary', ''))}</itunes:summary>
-    <enclosure url="{feed_url('ep/' + e['file'])}" length="{e['size']}" type="audio/mpeg"/>
+    <enclosure url="{feed_url('ep/' + e['file'])}" length="{e['size']}" type="audio/mpeg"/>{img}
     <itunes:duration>{d // 60}:{d % 60:02d}</itunes:duration>
     <itunes:explicit>false</itunes:explicit>
   </item>""")
@@ -250,8 +332,8 @@ def build_feed(eps: list[dict]) -> str:
   <itunes:author>Brief Matinal</itunes:author>
   <itunes:block>Yes</itunes:block>
   <itunes:explicit>false</itunes:explicit>
-  <itunes:image href="{feed_url('cover.png')}"/>
-  <image><url>{feed_url('cover.png')}</url><title>Brief Matinal</title><link>{feed_url('feed.xml')}</link></image>
+  <itunes:image href="{feed_url('cover.png')}?v={ARTWORK_VERSION}"/>
+  <image><url>{feed_url('cover.png')}?v={ARTWORK_VERSION}</url><title>Brief Matinal</title><link>{feed_url('feed.xml')}</link></image>
   <itunes:category text="News"/>{''.join(items)}
 </channel>
 </rss>
@@ -259,10 +341,8 @@ def build_feed(eps: list[dict]) -> str:
 
 
 async def ensure_cover() -> None:
-    cover = DATA / "cover.png"
-    if not cover.exists():
-        await run("ffmpeg", "-y", "-loglevel", "error", "-f", "lavfi",
-                  "-i", "color=c=0x1d3557:s=1400x1400", "-frames:v", "1", str(cover))
+    if not (DATA / "cover.png").exists():
+        render_artwork(DATA / "cover.png")
 
 
 # ---------- handlers ----------
@@ -324,10 +404,14 @@ async def h_brief(req: web.Request) -> web.Response:
               "duration": dur, "tts": engine, "test": bool(body.get("test"))}
         if ep["test"]:
             ep["title"] = "[Teste] " + ep["title"]
+        ep["image"] = fname.replace(".mp3", ".png")
+        render_artwork(EP_DIR / ep["image"], date, ep["test"])
         eps.append(ep)
         eps.sort(key=lambda x: x["created_at"])
         for old in eps[:-KEEP]:
             (EP_DIR / old["file"]).unlink(missing_ok=True)
+            if old.get("image"):
+                (EP_DIR / old["image"]).unlink(missing_ok=True)
         eps = eps[-KEEP:]
         save_db(eps)
         await ensure_cover()
@@ -362,12 +446,14 @@ async def h_cover(req: web.Request) -> web.StreamResponse:
 async def h_ep(req: web.Request) -> web.StreamResponse:
     feed_guard(req)
     name = req.match_info["name"]
-    if not re.fullmatch(r"[\w.-]+\.mp3", name):
+    m = re.fullmatch(r"[\w.-]+\.(mp3|png)", name)
+    if not m:
         raise web.HTTPNotFound()
     p = EP_DIR / name
     if not p.exists():
         raise web.HTTPNotFound()
-    return web.FileResponse(p, headers={"Content-Type": "audio/mpeg", "X-Robots-Tag": "noindex"})
+    ctype = "audio/mpeg" if m.group(1) == "mp3" else "image/png"
+    return web.FileResponse(p, headers={"Content-Type": ctype, "X-Robots-Tag": "noindex"})
 
 
 async def h_health(_: web.Request) -> web.Response:
@@ -416,6 +502,11 @@ async def h_privacy(_: web.Request) -> web.Response:
 
 def main() -> None:
     DATA.mkdir(parents=True, exist_ok=True)
+    EP_DIR.mkdir(parents=True, exist_ok=True)
+    eps = load_db()
+    if ensure_artwork(eps):
+        save_db(eps)
+    (DATA / "feed.xml").write_text(build_feed(eps))
     app = web.Application(client_max_size=50 * 1024 * 1024)
     app.add_routes([
         web.get("/", h_home),

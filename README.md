@@ -172,6 +172,7 @@ Prefira um app que baixe o feed direto do celular, como o **AntennaPod** (*Adici
 | Voz de reserva | `TTS_VOICE` e `TTS_RATE` (edge-tts). Liste as vozes com `docker exec brief-worker edge-tts --list-voices \| grep pt-BR`. |
 | Modelo | `CLAUDE_MODEL` (`sonnet`, `opus`, …) |
 | Episódios guardados | `KEEP_EPISODES` |
+| Capas | Geradas automaticamente (podcast + uma por episódio com a data), em Inter/Fira Code. `ARTWORK_BRAND` põe um texto no canto (ex.: seu domínio). Cores e layout em `render_artwork()` no `server.py`. |
 | Horário | gatilho *Dias úteis 06:30* no n8n |
 
 ## Problemas comuns

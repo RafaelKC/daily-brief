@@ -22,6 +22,13 @@ RUN mkdir -p /opt/piper \
  && curl -fsSL -o /opt/piper/pt_BR-faber-medium.onnx.json \
       https://huggingface.co/rhasspy/piper-voices/resolve/main/pt/pt_BR/faber/medium/pt_BR-faber-medium.onnx.json
 
+# Fontes da identidade visual (Inter + Fira Code) para as capas
+RUN mkdir -p /opt/fonts \
+ && curl -fsSL -o /tmp/inter.zip https://github.com/rsms/inter/releases/download/v4.1/Inter-4.1.zip \
+ && curl -fsSL -o /tmp/fira.zip https://github.com/tonsky/FiraCode/releases/download/6.2/Fira_Code_v6.2.zip \
+ && python -c "import zipfile; z=zipfile.ZipFile('/tmp/inter.zip'); [open('/opt/fonts/'+n.split('/')[-1],'wb').write(z.read(n)) for n in z.namelist() if n.split('/')[-1] in ('Inter-Regular.ttf','Inter-Bold.ttf','Inter-ExtraBold.ttf')]; z=zipfile.ZipFile('/tmp/fira.zip'); [open('/opt/fonts/'+n.split('/')[-1],'wb').write(z.read(n)) for n in z.namelist() if n.split('/')[-1] in ('FiraCode-Regular.ttf','FiraCode-Bold.ttf')]" \
+ && rm /tmp/inter.zip /tmp/fira.zip && ls /opt/fonts
+
 USER app
 # Claude Code native binary (linux arm64/x64)
 RUN curl -fsSL https://claude.ai/install.sh | bash && claude --version
